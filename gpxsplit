@@ -1,0 +1,146 @@
+#!/usr/bin/perl -w
+
+# (C) Karl Brodowsky 2024-06-09
+# Licence GPS v3.0
+# (see https://www.gnu.org/licenses/gpl-3.0.de.html )
+
+use strict;
+use utf8;
+use Encode qw(decode encode);
+
+binmode STDOUT, ":utf8";
+binmode STDIN, ":utf8";
+
+my $header =<<'EOH';
+<?xml version='1.0' encoding='UTF-8'?>
+<gpx version="1.1" creator="https://www.komoot.de" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+  <metadata>
+    <name><<TITLE>></name>
+    <author>
+      <link href="https://www.komoot.de">
+        <text>komoot</text>
+        <type>text/html</type>
+      </link>
+    </author>
+  </metadata>
+  <trk>
+    <name><<TITLE>></name>
+    <trkseg>
+EOH
+my $footer =<<'EOF';
+    </trkseg>
+  </trk>
+</gpx>
+EOF
+
+sub usage($) {
+    my $msg = $_[0];
+    if ($msg) {
+        chomp $msg;
+        print $msg, "\n\n";
+    }
+    print <<"EOU";
+USAGE
+
+$0 <<FILE>> <<NAME>> <<NUMBER_OF_PARTS>>
+EOU
+
+    if ($msg) {
+        exit 1;
+    } else {
+        exit 0;
+    }
+}
+
+if (scalar(@ARGV) == 0 || $ARGV[0] =~ m/^-{0,2}help/) {
+    usage("");
+}
+if (scalar(@ARGV) != 3) {
+    usage("wrong number of arguments");
+}
+my $file = $ARGV[0];
+my $file_u = decode("utf-8", $file);
+unless (-f $file && -r $file) {
+    usage("$file_u is not a readable file");
+}
+unless ($file =~ m/.+\.gpx$/) {
+    usage("$file_u is not a gpx-file");
+}
+my $name = decode("utf-8", $ARGV[1]);
+$name =~ s/^\s+//;
+$name =~ s/\s+$//;
+$name =~ s/\r//g;
+
+unless (length($name) > 0) {
+    usage("$name must be at least 1 character");
+}
+if ($name =~ m/[<>"']/) {
+    usage("$name contains illegal characters");
+}
+print "name=$name\n";
+
+my $number_of_parts = $ARGV[2];
+if ($number_of_parts < 2) {
+    usage("at least 2 parts are required");
+}
+
+open INPUT, "<:utf8", $file || usage("cannot open $file_u");
+my @points = ();
+my $point = "";
+while (<INPUT>) {
+    if (m/^\s*<trkpt/) {
+        $point = $_;
+    } elsif (m/^\s*<(ele|time)>/) {
+        $point .= $_;
+    } elsif (m/^\s*<\/trkpt>/) {
+        $point .= $_;
+        push @points, $point;
+        $point = "";
+    } else {
+        print;
+    }
+}
+close INPUT;
+print "\n";
+
+my $length = scalar(@points);
+
+sub part_length($$) {
+    my ($remaining_length, $remaining_number_of_parts) = @_;
+    ($remaining_length - 1) / $remaining_number_of_parts + 1;
+}
+
+my $part_length = part_length($length, $number_of_parts);
+print "length = $length part_length = $part_length number_of_parts = $number_of_parts\n";
+
+if ($part_length < 2) {
+    usage("too many parts part_length=$part_length");
+}
+my $remaining_length;
+my $remaining_number_of_parts = $number_of_parts;
+my $i = 0;
+while ($remaining_number_of_parts > 0) {
+    $remaining_length=scalar(@points);
+    $part_length = int(part_length($remaining_length, $remaining_number_of_parts) + 0.5);
+    my $header_i = $header;
+    my $title_i = sprintf("%s (%d)", $name, $i);
+    $header_i =~ s/<<TITLE>>/$title_i/g;
+    my $file_i = $file;
+    my $file_u_i = decode("utf-8", $file);
+    $file_i =~ s/\.gpx$/_$i.gpx/;
+    print "i=$i remaining_number_of_parts=$remaining_number_of_parts remaining_length=$remaining_length\n";
+    print "i=$i file_i=$file_u_i title_i=$title_i\n";
+    open OUTPUT, ">:utf8", $file_i;
+    print OUTPUT $header_i;
+    for (my $j = 0; $j < $part_length; $j++) {
+        my $point = $points[0];
+        if ($j < $part_length -1) {
+            shift @points;
+        }
+        print OUTPUT $point;
+    }
+    print OUTPUT $footer;
+    close OUTPUT;
+    $i++;
+    $remaining_number_of_parts--;
+}
